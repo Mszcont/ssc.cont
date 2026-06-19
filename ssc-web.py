@@ -421,13 +421,15 @@ def page_dashboard():
     df_view = df_summary[df_summary["status"].fillna("جاري").isin(chosen_status)] if chosen_status else df_summary
 
     # --- تنبيهات ---
+    st.markdown("#### 🚨 تنبيهات")
     alerts = build_alerts(df_view)
     if alerts:
-        st.markdown("#### 🚨 تنبيهات")
         for level, msg in alerts:
             css_class = "ssc-alert-danger" if level == "danger" else "ssc-alert-box"
             st.markdown(f'<div class="{css_class}">{msg}</div>', unsafe_allow_html=True)
-        st.markdown("---")
+    else:
+        st.success("✅ لا توجد تنبيهات حالياً — كل المشاريع ضمن الحدود الطبيعية.")
+    st.markdown("---")
 
     # --- المؤشرات الرئيسية ---
     col1, col2, col3, col4 = st.columns(4)
