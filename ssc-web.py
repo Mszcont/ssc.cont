@@ -58,7 +58,7 @@ def init_db():
             FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE
         )''')
     
-    # فحص عمود worker_count
+    # فحص وضمان وجود عمود worker_count في الجداول القديمة وتعديله تلقائياً
     cursor.execute("PRAGMA table_info(labor)")
     columns = [column[1] for column in cursor.fetchall()]
     if 'worker_count' not in columns:
@@ -89,34 +89,35 @@ if menu == "📊 لوحة التحكم والتقارير":
     st.markdown("---")
     
     conn = get_db_connection()
-    df_p = pd.read_sql_query("SELECT * FROM projects", conn)
+    # جلب البيانات بتحديد الأعمدة صراحة لتجنب أي تضارب في الترتيب
+    df_p = pd.read_sql_query("SELECT project_id, project_name, start_date, end_date, contract_value FROM projects", conn)
     df_r = pd.read_sql_query("SELECT project_id, amount FROM revenues", conn)
     df_e = pd.read_sql_query("SELECT project_id, amount FROM expenses", conn)
     df_l = pd.read_sql_query("SELECT project_id, total FROM labor", conn)
     conn.close()
     
     if not df_p.empty:
-        # حساب المجاميع لكل جدول على حدة بشكل آمن مع تجميعها حسب كود المشروع
+        # حساب مجاميع الجداول بحسب كود المشروع بشكل مستقل
         df_r_grouped = df_r.groupby('project_id')['amount'].sum().reset_index(name='total_rev') if not df_r.empty else pd.DataFrame(columns=['project_id', 'total_rev'])
         df_e_grouped = df_e.groupby('project_id')['amount'].sum().reset_index(name='total_exp') if not df_e.empty else pd.DataFrame(columns=['project_id', 'total_exp'])
         df_l_grouped = df_l.groupby('project_id')['total'].sum().reset_index(name='total_labor') if not df_l.empty else pd.DataFrame(columns=['project_id', 'total_labor'])
         
-        # ربط الجداول بالجدول الرئيسي للمشاريع (Left Join) لضمان عدم اختفاء أي مشروع
+        # دمج البيانات لربطها بالمشروع الأصلي بأمان
         df_summary = df_p.copy()
         df_summary = df_summary.merge(df_r_grouped, on='project_id', how='left')
         df_summary = df_summary.merge(df_e_grouped, on='project_id', how='left')
         df_summary = df_summary.merge(df_l_grouped, on='project_id', how='left')
         
-        # تحويل القيم الفارغة (NaN) إلى أصفار لإجراء العمليات الحسابية
+        # معالجة القيم الفارغة وحساب الصوافي
+        df_summary['contract_value'] = pd.to_numeric(df_summary['contract_value']).fillna(0)
         df_summary['total_rev'] = df_summary['total_rev'].fillna(0)
         df_summary['total_exp'] = df_summary['total_exp'].fillna(0)
         df_summary['total_labor'] = df_summary['total_labor'].fillna(0)
         
-        # العمليات الحسابية النهائية
         df_summary['اجمالي_المصروفات'] = df_summary['total_exp'] + df_summary['total_labor']
         df_summary['صافي_الربح'] = df_summary['total_rev'] - df_summary['اجمالي_المصروفات']
         
-        # كروت المؤشرات المالية العامة
+        # كروت المؤشرات العلوية
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("إجمالي قيمة العقود", f"{df_summary['contract_value'].sum():,.2f} ر.س")
         col2.metric("إجمالي الإيرادات المحصلة", f"{df_summary['total_rev'].sum():,.2f} ر.س")
@@ -127,7 +128,6 @@ if menu == "📊 لوحة التحكم والتقارير":
         
         st.markdown("### 📋 ملخص أداء المشاريع")
         
-        # تنسيق الجدول للعرض المباشر
         df_display = df_summary.rename(columns={
             'project_id': 'كود المشروع',
             'project_name': 'اسم المشروع',
@@ -137,7 +137,6 @@ if menu == "📊 لوحة التحكم والتقارير":
             'صافي_الربح': 'صافي الربح'
         })
         
-        # عرض البيانات وتنسيق الأرقام بفاصلة الآلاف وعلامة العملة
         st.dataframe(
             df_display[['كود المشروع', 'اسم المشروع', 'قيمة العقد', 'إجمالي المحصل', 'إجمالي المصاريف', 'صافي_الربح']], 
             use_container_width=True
@@ -172,7 +171,9 @@ elif menu == "➕ إضافة وإدارة المشاريع":
                 if p_id and p_name:
                     conn = get_db_connection()
                     try:
-                        conn.execute("INSERT INTO projects VALUES (?, ?, ?, ?, ?)", (p_id, p_name, str(start_d), str(end_d), val))
+                        # كتابة الاستعلام بتحديد الأعمدة لضمان التوافق التام
+                        conn.execute("INSERT INTO projects (project_id, project_name, start_date, end_date, contract_value) VALUES (?, ?, ?, ?, ?)", 
+                                     (p_id, p_name, str(start_d), str(end_d), val))
                         conn.commit()
                         st.success(f"تم تسجيل مشروع ({p_name}) بنجاح!")
                         st.rerun()
@@ -185,7 +186,7 @@ elif menu == "➕ إضافة وإدارة المشاريع":
                     
     with tab2:
         conn = get_db_connection()
-        projects_df = pd.read_sql_query("SELECT * FROM projects", conn)
+        projects_df = pd.read_sql_query("SELECT project_id, project_name, start_date, end_date, contract_value FROM projects", conn)
         conn.close()
         
         if not projects_df.empty:
