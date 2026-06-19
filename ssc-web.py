@@ -46,7 +46,7 @@ def init_db():
             notes TEXT,
             FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE
         )''')
-    # جدول العمالة (تم تحديثه ليشمل عدد العمال)
+    # جدول العمالة
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS labor (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,7 +58,7 @@ def init_db():
             FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE
         )''')
     
-    # فحص ما إذا كان عمود worker_count موجوداً مسبقاً (لتفادي الأخطاء في القواعد القديمة)
+    # فحص عمود worker_count
     cursor.execute("PRAGMA table_info(labor)")
     columns = [column[1] for column in cursor.fetchall()]
     if 'worker_count' not in columns:
@@ -90,22 +90,33 @@ if menu == "📊 لوحة التحكم والتقارير":
     
     conn = get_db_connection()
     df_p = pd.read_sql_query("SELECT * FROM projects", conn)
-    df_r = pd.read_sql_query("SELECT project_id, SUM(amount) as total_rev FROM revenues GROUP BY project_id", conn)
-    df_e = pd.read_sql_query("SELECT project_id, SUM(amount) as total_exp FROM expenses GROUP BY project_id", conn)
-    df_l = pd.read_sql_query("SELECT project_id, SUM(total) as total_labor FROM labor GROUP BY project_id", conn)
+    df_r = pd.read_sql_query("SELECT project_id, amount FROM revenues", conn)
+    df_e = pd.read_sql_query("SELECT project_id, amount FROM expenses", conn)
+    df_l = pd.read_sql_query("SELECT project_id, total FROM labor", conn)
     conn.close()
     
     if not df_p.empty:
+        # حساب المجاميع لكل جدول على حدة بشكل آمن مع تجميعها حسب كود المشروع
+        df_r_grouped = df_r.groupby('project_id')['amount'].sum().reset_index(name='total_rev') if not df_r.empty else pd.DataFrame(columns=['project_id', 'total_rev'])
+        df_e_grouped = df_e.groupby('project_id')['amount'].sum().reset_index(name='total_exp') if not df_e.empty else pd.DataFrame(columns=['project_id', 'total_exp'])
+        df_l_grouped = df_l.groupby('project_id')['total'].sum().reset_index(name='total_labor') if not df_l.empty else pd.DataFrame(columns=['project_id', 'total_labor'])
+        
+        # ربط الجداول بالجدول الرئيسي للمشاريع (Left Join) لضمان عدم اختفاء أي مشروع
         df_summary = df_p.copy()
-        df_summary = df_summary.merge(df_r, on='project_id', how='left')
-        df_summary = df_summary.merge(df_e, on='project_id', how='left')
-        df_summary = df_summary.merge(df_l, on='project_id', how='left')
+        df_summary = df_summary.merge(df_r_grouped, on='project_id', how='left')
+        df_summary = df_summary.merge(df_e_grouped, on='project_id', how='left')
+        df_summary = df_summary.merge(df_l_grouped, on='project_id', how='left')
         
-        df_summary.fillna(0, inplace=True)
+        # تحويل القيم الفارغة (NaN) إلى أصفار لإجراء العمليات الحسابية
+        df_summary['total_rev'] = df_summary['total_rev'].fillna(0)
+        df_summary['total_exp'] = df_summary['total_exp'].fillna(0)
+        df_summary['total_labor'] = df_summary['total_labor'].fillna(0)
         
+        # العمليات الحسابية النهائية
         df_summary['اجمالي_المصروفات'] = df_summary['total_exp'] + df_summary['total_labor']
         df_summary['صافي_الربح'] = df_summary['total_rev'] - df_summary['اجمالي_المصروفات']
         
+        # كروت المؤشرات المالية العامة
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("إجمالي قيمة العقود", f"{df_summary['contract_value'].sum():,.2f} ر.س")
         col2.metric("إجمالي الإيرادات المحصلة", f"{df_summary['total_rev'].sum():,.2f} ر.س")
@@ -116,6 +127,7 @@ if menu == "📊 لوحة التحكم والتقارير":
         
         st.markdown("### 📋 ملخص أداء المشاريع")
         
+        # تنسيق الجدول للعرض المباشر
         df_display = df_summary.rename(columns={
             'project_id': 'كود المشروع',
             'project_name': 'اسم المشروع',
@@ -124,7 +136,12 @@ if menu == "📊 لوحة التحكم والتقارير":
             'اجمالي_المصروفات': 'إجمالي المصاريف',
             'صافي_الربح': 'صافي الربح'
         })
-        st.dataframe(df_display[['كود المشروع', 'اسم المشروع', 'قيمة العقد', 'إجمالي المحصل', 'إجمالي المصاريف', 'صافي_الربح']], use_container_width=True)
+        
+        # عرض البيانات وتنسيق الأرقام بفاصلة الآلاف وعلامة العملة
+        st.dataframe(
+            df_display[['كود المشروع', 'اسم المشروع', 'قيمة العقد', 'إجمالي المحصل', 'إجمالي المصاريف', 'صافي_الربح']], 
+            use_container_width=True
+        )
         
         st.markdown("### 📈 تحليلات بيانية")
         fig = px.bar(df_summary, x='project_name', y=['total_rev', 'اجمالي_المصروفات', 'صافي_الربح'], 
@@ -269,14 +286,12 @@ elif menu == "👷 تكاليف العمالة":
         selected_p = st.selectbox("اختر المشروع:", list(p_options.keys()))
         
         with st.form("labor_form"):
-            # الحقل الجديد: عدد العمال
             workers = st.number_input("عدد العمال المخصصين:", min_value=1, step=1, value=1)
             days = st.number_input("عدد الأيام / الساعات الكلية المخصصة لكل عامل:", min_value=1, step=1)
             wage = st.number_input("أجر العامل الواحد لليوم / الساعة (ر.س):", min_value=0.0, format="%.2f")
             
             submit = st.form_submit_button("احسب وسجل التكلفة")
             if submit:
-                # حساب التكلفة بناءً على عدد العمال والأيام والأجر
                 total_labor_cost = workers * days * wage
                 conn = get_db_connection()
                 conn.execute("INSERT INTO labor (project_id, worker_count, days, wage, total) VALUES (?, ?, ?, ?, ?)", 
