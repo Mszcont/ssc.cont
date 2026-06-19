@@ -6,8 +6,9 @@
     "codespaces": {
       "openFiles": [
         "README.md",
+        "requirements.txt"
         "ssc-web.py"
-      ]
+      
     },
     "vscode": {
       "settings": {},
