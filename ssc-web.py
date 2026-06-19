@@ -218,7 +218,5 @@ elif menu == "👷 تكاليف العمالة":
                 conn.commit()
                 conn.close()
                 st.success(f"تم تسجيل التكلفة الإجمالية للعمالة بمبلغ {total_labor_cost:,.2f} ر.س")
-                  import streamlit as st
-   else:
-      
+    else:
         st.warning("يرجى إضافة مشروع أولاً لتتمكن من تخصيص عمالة.")
