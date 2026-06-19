@@ -46,16 +46,27 @@ def init_db():
             notes TEXT,
             FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE
         )''')
-    # جدول العمالة
+    # جدول العمالة (تم تحديثه ليشمل عدد العمال)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS labor (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             project_id TEXT,
+            worker_count INTEGER DEFAULT 1,
             days INTEGER,
             wage REAL,
             total REAL,
             FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE
         )''')
+    
+    # فحص ما إذا كان عمود worker_count موجوداً مسبقاً (لتفادي الأخطاء في القواعد القديمة)
+    cursor.execute("PRAGMA table_info(labor)")
+    columns = [column[1] for column in cursor.fetchall()]
+    if 'worker_count' not in columns:
+        try:
+            cursor.execute("ALTER TABLE labor ADD COLUMN worker_count INTEGER DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass
+
     conn.commit()
     conn.close()
 
@@ -85,19 +96,16 @@ if menu == "📊 لوحة التحكم والتقارير":
     conn.close()
     
     if not df_p.empty:
-        # دمج البيانات بطريقة آمنة
         df_summary = df_p.copy()
         df_summary = df_summary.merge(df_r, on='project_id', how='left')
         df_summary = df_summary.merge(df_e, on='project_id', how='left')
         df_summary = df_summary.merge(df_l, on='project_id', how='left')
         
-        # تعبئة القيم الفارغة بأصفار
         df_summary.fillna(0, inplace=True)
         
         df_summary['اجمالي_المصروفات'] = df_summary['total_exp'] + df_summary['total_labor']
         df_summary['صافي_الربح'] = df_summary['total_rev'] - df_summary['اجمالي_المصروفات']
         
-        # كروت المؤشرات المالية العامة
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("إجمالي قيمة العقود", f"{df_summary['contract_value'].sum():,.2f} ر.س")
         col2.metric("إجمالي الإيرادات المحصلة", f"{df_summary['total_rev'].sum():,.2f} ر.س")
@@ -108,7 +116,6 @@ if menu == "📊 لوحة التحكم والتقارير":
         
         st.markdown("### 📋 ملخص أداء المشاريع")
         
-        # تحسين مسميات الأعمدة للعرض
         df_display = df_summary.rename(columns={
             'project_id': 'كود المشروع',
             'project_name': 'اسم المشروع',
@@ -119,7 +126,6 @@ if menu == "📊 لوحة التحكم والتقارير":
         })
         st.dataframe(df_display[['كود المشروع', 'اسم المشروع', 'قيمة العقد', 'إجمالي المحصل', 'إجمالي المصاريف', 'صافي_الربح']], use_container_width=True)
         
-        # رسومات بيانية تفاعلية
         st.markdown("### 📈 تحليلات بيانية")
         fig = px.bar(df_summary, x='project_name', y=['total_rev', 'اجمالي_المصروفات', 'صافي_الربح'], 
                      barmode='group', title='مقارنة الإيرادات والمصروفات والأرباح لكل مشروع',
@@ -166,15 +172,21 @@ elif menu == "➕ إضافة وإدارة المشاريع":
         conn.close()
         
         if not projects_df.empty:
-            st.write("المشاريع المسجلة:")
-            st.dataframe(projects_df, use_container_width=True)
+            st.write("المشاريع المسجلة حالياً:")
+            projects_display = projects_df.rename(columns={
+                'project_id': 'كود المشروع',
+                'project_name': 'اسم المشروع',
+                'start_date': 'تاريخ البداية',
+                'end_date': 'تاريخ النهاية المتوقع',
+                'contract_value': 'إجمالي قيمة العقد (ر.س)'
+            })
+            st.dataframe(projects_display, use_container_width=True)
             
             project_to_delete = st.selectbox("اختر مشروعاً لحذفه نهائياً:", projects_df['project_name'].tolist(), key="del_proj")
             p_id_to_del = projects_df[projects_df['project_name'] == project_to_delete]['project_id'].values[0]
             
             if st.button("❌ حذف المشروع المختار بجميع بياناته", type="primary"):
                 conn = get_db_connection()
-                # تفعيل حذف العلاقات تلقائياً
                 conn.execute("PRAGMA foreign_keys = ON")
                 conn.execute("DELETE FROM projects WHERE project_id = ?", (p_id_to_del,))
                 conn.commit()
@@ -257,17 +269,20 @@ elif menu == "👷 تكاليف العمالة":
         selected_p = st.selectbox("اختر المشروع:", list(p_options.keys()))
         
         with st.form("labor_form"):
-            days = st.number_input("عدد الأيام / الساعات الكلية المخصصة:", min_value=1, step=1)
-            wage = st.number_input("أجر اليوم الواحد / الساعة (ر.س):", min_value=0.0, format="%.2f")
+            # الحقل الجديد: عدد العمال
+            workers = st.number_input("عدد العمال المخصصين:", min_value=1, step=1, value=1)
+            days = st.number_input("عدد الأيام / الساعات الكلية المخصصة لكل عامل:", min_value=1, step=1)
+            wage = st.number_input("أجر العامل الواحد لليوم / الساعة (ر.س):", min_value=0.0, format="%.2f")
             
             submit = st.form_submit_button("احسب وسجل التكلفة")
             if submit:
-                total_labor_cost = days * wage
+                # حساب التكلفة بناءً على عدد العمال والأيام والأجر
+                total_labor_cost = workers * days * wage
                 conn = get_db_connection()
-                conn.execute("INSERT INTO labor (project_id, days, wage, total) VALUES (?, ?, ?, ?)", 
-                             (p_options[selected_p], days, wage, total_labor_cost))
+                conn.execute("INSERT INTO labor (project_id, worker_count, days, wage, total) VALUES (?, ?, ?, ?, ?)", 
+                             (p_options[selected_p], workers, days, wage, total_labor_cost))
                 conn.commit()
                 conn.close()
-                st.success(f"تم تسجيل التكلفة الإجمالية للعمالة بمبلغ {total_labor_cost:,.2f} ر.س")
+                st.success(f"تم تسجيل التكلفة الإجمالية لعدد ({workers}) عمال بمبلغ {total_labor_cost:,.2f} ر.س")
     else:
         st.warning("يرجى إضافة مشروع أولاً لتتمكن من تخصيص عمالة.")
