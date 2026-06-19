@@ -218,8 +218,7 @@ elif menu == "👷 تكاليف العمالة":
                 conn.commit()
                 conn.close()
                 st.success(f"تم تسجيل التكلفة الإجمالية للعمالة بمبلغ {total_labor_cost:,.2f} ر.س")
-    else:
-        import streamlit as st
+                  import streamlit as st
 
 # مدخلات المستخدم
 name = st.text_input("الاسم", key="name")
@@ -231,4 +230,6 @@ if st.button("مسح البيانات"):
     st.session_state["age"] = None
     st.experimental_rerun()
 
+    else:
+      
         st.warning("يرجى إضافة مشروع أولاً لتتمكن من تخصيص عمالة.")
