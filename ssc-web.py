@@ -33,7 +33,7 @@ def init_db():
             date TEXT,
             amount REAL,
             stage TEXT,
-            FOREIGN KEY(project_id) REFERENCES projects(project_id)
+            FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE
         )''')
     # جدول المصروفات
     cursor.execute('''
@@ -44,7 +44,7 @@ def init_db():
             expense_type TEXT,
             amount REAL,
             notes TEXT,
-            FOREIGN KEY(project_id) REFERENCES projects(project_id)
+            FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE
         )''')
     # جدول العمالة
     cursor.execute('''
@@ -54,7 +54,7 @@ def init_db():
             days INTEGER,
             wage REAL,
             total REAL,
-            FOREIGN KEY(project_id) REFERENCES projects(project_id)
+            FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE
         )''')
     conn.commit()
     conn.close()
@@ -64,7 +64,13 @@ init_db()
 # --- القائمة الجانبية للتنقل ---
 st.sidebar.title("🏗️ نظام SSC الذكي")
 st.sidebar.markdown("---")
-menu = st.sidebar.radio("الانتقال إلى:", ["📊 لوحة التحكم والتقارير", "➕ إضافة مشروع جديد", "💰 تسجيل الإيرادات", "📉 تسجيل المصروفات", "👷 تكاليف العمالة"])
+menu = st.sidebar.radio("الانتقال إلى:", [
+    "📊 لوحة التحكم والتقارير", 
+    "➕ إضافة وإدارة المشاريع", 
+    "💰 تسجيل الإيرادات", 
+    "📉 تسجيل المصروفات", 
+    "👷 تكاليف العمالة"
+])
 
 # --- 1. لوحة التحكم والتقارير ---
 if menu == "📊 لوحة التحكم والتقارير":
@@ -72,7 +78,6 @@ if menu == "📊 لوحة التحكم والتقارير":
     st.markdown("---")
     
     conn = get_db_connection()
-    # جلب البيانات لعمل الحسابات
     df_p = pd.read_sql_query("SELECT * FROM projects", conn)
     df_r = pd.read_sql_query("SELECT project_id, SUM(amount) as total_rev FROM revenues GROUP BY project_id", conn)
     df_e = pd.read_sql_query("SELECT project_id, SUM(amount) as total_exp FROM expenses GROUP BY project_id", conn)
@@ -80,9 +85,15 @@ if menu == "📊 لوحة التحكم والتقارير":
     conn.close()
     
     if not df_p.empty:
-        # دمج الجداول لحساب الصافي
-        df_summary = df_p.merge(df_r, on='project_id', how='left').merge(df_e, on='project_id', how='left').merge(df_l, on='project_id', how='left')
+        # دمج البيانات بطريقة آمنة
+        df_summary = df_p.copy()
+        df_summary = df_summary.merge(df_r, on='project_id', how='left')
+        df_summary = df_summary.merge(df_e, on='project_id', how='left')
+        df_summary = df_summary.merge(df_l, on='project_id', how='left')
+        
+        # تعبئة القيم الفارغة بأصفار
         df_summary.fillna(0, inplace=True)
+        
         df_summary['اجمالي_المصروفات'] = df_summary['total_exp'] + df_summary['total_labor']
         df_summary['صافي_الربح'] = df_summary['total_rev'] - df_summary['اجمالي_المصروفات']
         
@@ -96,42 +107,82 @@ if menu == "📊 لوحة التحكم والتقارير":
         col4.metric("صافي الأرباح الإجمالية", f"{profit:,.2f} ر.س", delta=f"{profit:,.2f}", delta_color="normal")
         
         st.markdown("### 📋 ملخص أداء المشاريع")
-        st.dataframe(df_summary[['project_id', 'project_name', 'contract_value', 'total_rev', 'اجمالي_المصروفات', 'صافي_الربح']], use_container_width=True)
+        
+        # تحسين مسميات الأعمدة للعرض
+        df_display = df_summary.rename(columns={
+            'project_id': 'كود المشروع',
+            'project_name': 'اسم المشروع',
+            'contract_value': 'قيمة العقد',
+            'total_rev': 'إجمالي المحصل',
+            'اجمالي_المصروفات': 'إجمالي المصاريف',
+            'صافي_الربح': 'صافي الربح'
+        })
+        st.dataframe(df_display[['كود المشروع', 'اسم المشروع', 'قيمة العقد', 'إجمالي المحصل', 'إجمالي المصاريف', 'صافي_الربح']], use_container_width=True)
         
         # رسومات بيانية تفاعلية
         st.markdown("### 📈 تحليلات بيانية")
-        fig = px.bar(df_summary, x='project_name', y=['total_rev', 'اجمالي_المصروفات', 'صافي_الربح'], barmode='group', title='مقارنة الإيرادات والمصروفات والأرباح لكل مشروع')
+        fig = px.bar(df_summary, x='project_name', y=['total_rev', 'اجمالي_المصروفات', 'صافي_الربح'], 
+                     barmode='group', title='مقارنة الإيرادات والمصروفات والأرباح لكل مشروع',
+                     labels={'value': 'المبلغ (ر.س)', 'project_name': 'اسم المشروع', 'variable': 'التصنيف'})
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("لا توجد مشاريع مسجلة حالياً. يرجى إضافة مشاريع من القائمة الجانبية.")
 
-# --- 2. إضافة مشروع جديد ---
-elif menu == "➕ إضافة مشروع جديد":
-    st.title("➕ تسجيل مشروع جديد في النظام")
+# --- 2. إضافة وإدارة المشروع ---
+elif menu == "➕ إضافة وإدارة المشاريع":
+    st.title("➕ تسجيل مشروع جديد أو حذفه")
     st.markdown("---")
     
-    with st.form("project_form"):
-        p_id = st.text_input("رقم المشروع (كود فريد):")
-        p_name = st.text_input("اسم المشروع:")
-        col1, col2 = st.columns(2)
-        start_d = col1.date_input("تاريخ البداية")
-        end_d = col2.date_input("تاريخ النهاية المتوقع")
-        val = st.number_input("قيمة العقد الإجمالية (ر.س):", min_value=0.0, format="%.2f")
+    tab1, tab2 = st.tabs(["إضافة مشروع جديد", "إدارة المشاريع الحالية"])
+    
+    with tab1:
+        with st.form("project_form"):
+            p_id = st.text_input("رقم المشروع (كود فريد):")
+            p_name = st.text_input("اسم المشروع:")
+            col1, col2 = st.columns(2)
+            start_d = col1.date_input("تاريخ البداية")
+            end_d = col2.date_input("تاريخ النهاية المتوقع")
+            val = st.number_input("قيمة العقد الإجمالية (ر.س):", min_value=0.0, format="%.2f")
+            
+            submit = st.form_submit_button("حفظ المشروع")
+            if submit:
+                if p_id and p_name:
+                    conn = get_db_connection()
+                    try:
+                        conn.execute("INSERT INTO projects VALUES (?, ?, ?, ?, ?)", (p_id, p_name, str(start_d), str(end_d), val))
+                        conn.commit()
+                        st.success(f"تم تسجيل مشروع ({p_name}) بنجاح!")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("رقم المشروع مسجل مسبقاً! يرجى استخدام رقم فريد.")
+                    finally:
+                        conn.close()
+                else:
+                    st.warning("يرجى ملء الحقول الأساسية (الرقم والاسم).")
+                    
+    with tab2:
+        conn = get_db_connection()
+        projects_df = pd.read_sql_query("SELECT * FROM projects", conn)
+        conn.close()
         
-        submit = st.form_submit_button("حفظ المشروع")
-        if submit:
-            if p_id and p_name:
+        if not projects_df.empty:
+            st.write("المشاريع المسجلة:")
+            st.dataframe(projects_df, use_container_width=True)
+            
+            project_to_delete = st.selectbox("اختر مشروعاً لحذفه نهائياً:", projects_df['project_name'].tolist(), key="del_proj")
+            p_id_to_del = projects_df[projects_df['project_name'] == project_to_delete]['project_id'].values[0]
+            
+            if st.button("❌ حذف المشروع المختار بجميع بياناته", type="primary"):
                 conn = get_db_connection()
-                try:
-                    conn.execute("INSERT INTO projects VALUES (?, ?, ?, ?, ?)", (p_id, p_name, str(start_d), str(end_d), val))
-                    conn.commit()
-                    st.success(f"تم تسجيل مشروع ({p_name}) بنجاح!")
-                except sqlite3.IntegrityError:
-                    st.error("رقم المشروع مسجل مسبقاً! يرجى استخدام رقم فريد.")
-                finally:
-                    conn.close()
-            else:
-                st.warning("يرجى ملء الحقول الأساسية (الرقم والاسم).")
+                # تفعيل حذف العلاقات تلقائياً
+                conn.execute("PRAGMA foreign_keys = ON")
+                conn.execute("DELETE FROM projects WHERE project_id = ?", (p_id_to_del,))
+                conn.commit()
+                conn.close()
+                st.success(f"تم حذف المشروع {project_to_delete} بنجاح!")
+                st.rerun()
+        else:
+            st.info("لا توجد مشاريع مضافة بعد.")
 
 # --- 3. تسجيل الإيرادات ---
 elif menu == "💰 تسجيل الإيرادات":
