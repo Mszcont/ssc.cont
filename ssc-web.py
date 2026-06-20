@@ -69,6 +69,46 @@ st.markdown("""
 
 
 # =====================================================================================
+# إعدادات حجم ولون الخط (قابلة للتخصيص من القائمة الجانبية)
+# =====================================================================================
+if "font_size" not in st.session_state:
+    st.session_state.font_size = 16          # px
+if "font_color" not in st.session_state:
+    st.session_state.font_color = "#1a1a1a"  # لون نص افتراضي (المنطقة الرئيسية فقط)
+
+
+def apply_dynamic_style():
+    """يحقن CSS بحجم ولون الخط المختارين من المستخدم، ويعيد فرض لون نص القائمة
+    الجانبية في النهاية (لكي لا يتأثر بلون الخط العام المختار)."""
+    size = st.session_state.font_size
+    color = st.session_state.font_color
+    st.markdown(f"""
+    <style>
+        html, body, [class*="css"], .stMarkdown, .stMarkdown p, .stText,
+        p, span, label, li,
+        div[data-testid="stMetricLabel"], div[data-testid="stMetricValue"],
+        .stDataFrame, .stSelectbox label, .stTextInput label, .stNumberInput label,
+        .stDateInput label, .stRadio label, .stCheckbox label, .stTextArea label,
+        h1, h2, h3, h4, h5, h6 {{
+            font-size: {size}px !important;
+            color: {color} !important;
+        }}
+        h1 {{ font-size: {size + 14}px !important; }}
+        h2 {{ font-size: {size + 8}px !important; }}
+        h3 {{ font-size: {size + 4}px !important; }}
+        h4, h5 {{ font-size: {size + 2}px !important; }}
+        /* إعادة فرض لون نص القائمة الجانبية بعد التخصيص العام أعلاه */
+        section[data-testid="stSidebar"] * {{
+            color: #f5f5f5 !important;
+        }}
+    </style>
+    """, unsafe_allow_html=True)
+
+
+apply_dynamic_style()
+
+
+# =====================================================================================
 # طبقة قاعدة البيانات
 # =====================================================================================
 def get_db_connection():
@@ -1077,6 +1117,24 @@ user = current_user()
 
 st.sidebar.title("🏗️ نظام SSC الذكي")
 st.sidebar.markdown(f"👋 أهلاً، **{user.get('full_name') or user.get('username')}**  \n`{user.get('role')}`")
+st.sidebar.markdown("---")
+
+with st.sidebar.expander("⚙️ إعدادات العرض (حجم ولون الخط)", expanded=False):
+    st.session_state.font_size = st.slider(
+        "حجم الخط (px):", min_value=12, max_value=28,
+        value=st.session_state.font_size, step=1, key="font_size_slider"
+    )
+    st.session_state.font_color = st.color_picker(
+        "لون الخط:", value=st.session_state.font_color, key="font_color_picker"
+    )
+    if st.button("↩️ إعادة الضبط الافتراضي", use_container_width=True, key="reset_font_btn"):
+        st.session_state.font_size = 16
+        st.session_state.font_color = "#1a1a1a"
+        st.rerun()
+
+# إعادة تطبيق التنسيق بعد قراءة القيم الحالية (تشمل أي تغيير من المستخدم أعلاه)
+apply_dynamic_style()
+
 st.sidebar.markdown("---")
 
 menu_items = [
