@@ -37,7 +37,11 @@ st.set_page_config(page_title=APP_TITLE, page_icon="🏗️", layout="wide")
 st.markdown("""
 <style>
     html, body, [class*="css"]  { font-family: 'Tahoma', 'Segoe UI', sans-serif; }
-    .stApp { direction: rtl; }
+    .stApp {
+        direction: rtl;
+        background: linear-gradient(135deg, #0a1f3d 0%, #163a66 45%, #2f6fb5 100%);
+        background-attachment: fixed;
+    }
     div[data-testid="stMetric"] {
         background-color: #ffffff;
         border: 1px solid #e6e6e6;
@@ -71,6 +75,20 @@ st.markdown("""
         font-size: 0.8em;
         color: white;
     }
+    /* ===== حماية ثابتة لعناصر تحتفظ بخلفية فاتحة دوماً =====
+       هذه العناصر تبقى بخلفية بيضاء/فاتحة بشكل افتراضي (بطاقات المؤشرات،
+       الأزرار، صناديق الإدخال، القوائم المنسدلة، التنبيهات)، فنُثبّت لون
+       نصها داكناً دائماً ليبقى مقروءاً، بصرف النظر عن لون الخط العام
+       المختار للصفحة (الذي قد يكون أبيض ليناسب الخلفية المتدرجة). */
+    div[data-testid="stMetricLabel"], div[data-testid="stMetricValue"],
+    button p, button span, button div, button label,
+    [data-baseweb="select"] *, [data-baseweb="input"] *, [data-baseweb="tag"] *,
+    .stTextInput input, .stNumberInput input, .stDateInput input, .stTextArea textarea,
+    .stDataFrame, .stDataFrame *,
+    [data-testid*="Alert"] p, [data-testid*="Alert"] span, [data-testid*="Alert"] div,
+    .ssc-alert-box, .ssc-alert-danger {
+        color: #1a1a1a !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -81,7 +99,7 @@ st.markdown("""
 if "font_size" not in st.session_state:
     st.session_state.font_size = 16          # px
 if "font_color" not in st.session_state:
-    st.session_state.font_color = "#1a1a1a"  # لون نص افتراضي (المنطقة الرئيسية فقط)
+    st.session_state.font_color = "#ffffff"  # لون نص افتراضي (يناسب الخلفية الزرقاء المتدرجة)
 
 
 def apply_dynamic_style():
@@ -89,11 +107,11 @@ def apply_dynamic_style():
     الجانبية في النهاية (لكي لا يتأثر بلون الخط العام المختار، فخلفية القائمة
     الجانبية تبقى داكنة).
 
-    تنبيه مهم: استدعِ هذه الدالة مرة واحدة فقط في كل تشغيل للسكربت (إما من
-    داخل login_page() عند عدم تسجيل الدخول، أو مرة واحدة بعد عناصر التحكم في
-    القائمة الجانبية عند تسجيل الدخول) — استدعاؤها مرتين في نفس التشغيل قد
-    يجعل وسمي <style> يتنازعان على الأولوية، وهذا ما جعل التغييرات السابقة
-    تبدو كأنها لا تُطبَّق."""
+    تنبيه مهم: استدعِ هذه الدالة مرة واحدة فقط بعد تسجيل الدخول (بعد عناصر
+    التحكم في القائمة الجانبية) — صفحة تسجيل الدخول نفسها لها دالة تنسيق
+    منفصلة (apply_login_style) بلون خط أبيض ثابت، لأنها تظهر قبل معرفة
+    هوية المستخدم وتفضيلاته المحفوظة.
+    """
     size = st.session_state.font_size
     color = st.session_state.font_color
     st.markdown(f"""
@@ -101,8 +119,7 @@ def apply_dynamic_style():
         html, body, [class*="css"], [data-testid="stAppViewContainer"],
         .stMarkdown, .stMarkdown p, .stText,
         p, span, label, li,
-        div[data-testid="stMetricLabel"], div[data-testid="stMetricValue"],
-        .stDataFrame, .stSelectbox label, .stTextInput label, .stNumberInput label,
+        .stSelectbox label, .stTextInput label, .stNumberInput label,
         .stDateInput label, .stRadio label, .stCheckbox label, .stTextArea label,
         h1, h2, h3, h4, h5, h6 {{
             font-size: {size}px !important;
@@ -208,7 +225,7 @@ def init_db():
         )""")
     # تفضيلات عرض خاصة بكل مستخدم (لحفظ حجم/لون الخط بين تسجيلات الدخول والأجهزة)
     _safe_add_column(cur, "users", "font_size INTEGER DEFAULT 16")
-    _safe_add_column(cur, "users", "font_color TEXT DEFAULT '#1a1a1a'")
+    _safe_add_column(cur, "users", "font_color TEXT DEFAULT '#ffffff'")
 
     conn.commit()
 
@@ -239,8 +256,32 @@ def verify_user(username: str, password: str):
     return None
 
 
+def apply_login_style():
+    """ينسّق صفحة تسجيل الدخول تحديداً: يستخدم حجم الخط الحالي من الإعدادات
+    لكن يثبّت لون الخط على الأبيض دائماً (بدل اللون المحفوظ للمستخدم، لأن هذه
+    الصفحة تظهر قبل معرفة هوية المستخدم أصلاً). صناديق التنبيهات والأزرار
+    وحقول الإدخال محمية بألوان داكنة ثابتة من التنسيق العام (CSS) في أعلى
+    الملف، وتبقى مقروءة بصرف النظر عن هذا التثبيت."""
+    size = st.session_state.font_size
+    st.markdown(f"""
+    <style>
+        html, body, [class*="css"], [data-testid="stAppViewContainer"],
+        .stMarkdown, .stMarkdown p, .stText,
+        p, span, label, li,
+        h1, h2, h3, h4, h5, h6 {{
+            font-size: {size}px !important;
+            color: #ffffff !important;
+        }}
+        h1 {{ font-size: {size + 14}px !important; }}
+        h2 {{ font-size: {size + 8}px !important; }}
+        h3 {{ font-size: {size + 4}px !important; }}
+        h4, h5 {{ font-size: {size + 2}px !important; }}
+    </style>
+    """, unsafe_allow_html=True)
+
+
 def login_page():
-    apply_dynamic_style()
+    apply_login_style()
     st.title("🏗️ " + APP_TITLE)
     st.subheader("تسجيل الدخول")
     with st.form("login_form"):
@@ -253,7 +294,7 @@ def login_page():
                 st.session_state.auth_user = user
                 # استرجاع تفضيلات العرض المحفوظة لهذا المستخدم (حجم/لون الخط)
                 st.session_state.font_size = user.get("font_size") or 16
-                st.session_state.font_color = user.get("font_color") or "#1a1a1a"
+                st.session_state.font_color = user.get("font_color") or "#ffffff"
                 st.rerun()
             else:
                 st.error("اسم المستخدم أو كلمة المرور غير صحيحة.")
@@ -1215,12 +1256,12 @@ with st.sidebar.expander("⚙️ إعدادات العرض (حجم ولون ال
 
     if st.button("↩️ إعادة الضبط الافتراضي", use_container_width=True, key="reset_font_btn"):
         st.session_state.font_size = 16
-        st.session_state.font_color = "#1a1a1a"
+        st.session_state.font_color = "#ffffff"
         # تصفير حالة عناصر التحكم نفسها أيضاً — وإلا سيستمر شريط التمرير ومنتقي
         # اللون بعرض آخر وضع لهما بدلاً من القيمة الافتراضية.
         for widget_key in ("font_size_slider", "font_color_picker"):
             st.session_state.pop(widget_key, None)
-        _save_font_prefs(16, "#1a1a1a")
+        _save_font_prefs(16, "#ffffff")
         st.rerun()
 
 # تطبيق التنسيق مرة واحدة فقط في كل تشغيل، باستخدام القيم الحالية الآن
