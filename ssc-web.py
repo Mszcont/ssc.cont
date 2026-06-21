@@ -21,7 +21,13 @@ from datetime import datetime, date
 # =====================================================================================
 DB_PATH = "ssc_projects.db"
 APP_TITLE = "نظام SSC لإدارة المشاريع"
-CURRENCY = "ر.س"
+# الرمز الرسمي الجديد للريال السعودي (الذي اعتمده البنك المركزي السعودي SAMA)،
+# المُسجَّل في يونيكود بالنقطة U+20C1. يُستخدم في واجهة البرنامج المباشرة، مع
+# تحميل خط مخصص أدناه لضمان ظهوره بشكل صحيح حتى لو لم يدعمه خط النظام نفسه.
+CURRENCY = "\u20c1"
+# نص احتياطي يُستخدم في الملفات المُصدَّرة (Excel / PDF) فقط، لأن دعم الرمز
+# الجديد في برامج وخطوط الجهاز المستقبل للملف غير مضمون حالياً.
+CURRENCY_TEXT = "ر.س"
 # يُستخدم خط عربي كخيار احتياطي لضمان ظهور النصوص العربية بشكل صحيح داخل تقارير PDF.
 # لا حاجة لإعداد يدوي عادةً — يحاول البرنامج تحميله تلقائياً عند أول تصدير إن توفر
 # اتصال بالإنترنت.
@@ -34,9 +40,17 @@ ARABIC_FONT_DOWNLOAD_URLS = [
 st.set_page_config(page_title=APP_TITLE, page_icon="🏗️", layout="wide")
 
 # --- تنسيق عام للواجهة (CSS) ---
+# رابط خط مفتوح المصدر مخصص لرمز الريال السعودي الجديد (U+20C1)، نضيفه كخيار
+# احتياطي في حزمة الخطوط — يستخدمه المتصفح تلقائياً فقط لعرض هذا الرمز تحديداً
+# إن لم يدعمه الخط الأساسي، دون التأثير على بقية النصوص.
+st.markdown(
+    '<link rel="stylesheet" '
+    'href="https://cdn.jsdelivr.net/npm/@emran-alhaddad/saudi-riyal-font/index.css">',
+    unsafe_allow_html=True
+)
 st.markdown("""
 <style>
-    html, body, [class*="css"]  { font-family: 'Tahoma', 'Segoe UI', sans-serif; }
+    html, body, [class*="css"]  { font-family: 'Tahoma', 'Segoe UI', 'saudi_riyal', sans-serif; }
     .stApp {
         direction: rtl;
         background: linear-gradient(135deg, #0a1f3d 0%, #163a66 45%, #2f6fb5 100%);
@@ -88,6 +102,7 @@ st.markdown("""
     [data-testid*="Alert"] p, [data-testid*="Alert"] span, [data-testid*="Alert"] div,
     .ssc-alert-box, .ssc-alert-danger {
         color: #1a1a1a !important;
+        font-family: 'Tahoma', 'Segoe UI', 'saudi_riyal', sans-serif !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -379,7 +394,7 @@ def build_alerts(df_summary):
         # تجاوز الميزانية
         if row["total_costs"] > row["contract_value"] and row["contract_value"] > 0:
             over = row["total_costs"] - row["contract_value"]
-            alerts.append(("danger", f"⚠️ مشروع «{name}»: المصروفات تجاوزت قيمة العقد بمقدار {over:,.0f} {CURRENCY}"))
+            alerts.append(("danger", f"⚠️ مشروع «{name}»: المصروفات تجاوزت قيمة العقد بمقدار {CURRENCY} {over:,.0f}"))
 
         # اقتراب موعد الانتهاء (خلال 30 يوماً) وما زال جارياً
         if status == "جاري" and row.get("end_date"):
@@ -569,11 +584,11 @@ def page_dashboard():
 
     # --- المؤشرات الرئيسية ---
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("إجمالي قيمة العقود", f"{df_view['contract_value'].sum():,.0f} {CURRENCY}")
-    col2.metric("إجمالي الإيرادات المحصلة", f"{df_view['total_rev'].sum():,.0f} {CURRENCY}")
-    col3.metric("إجمالي المصاريف والعمالة", f"{df_view['total_costs'].sum():,.0f} {CURRENCY}")
+    col1.metric("إجمالي قيمة العقود", f"{CURRENCY} {df_view['contract_value'].sum():,.0f}")
+    col2.metric("إجمالي الإيرادات المحصلة", f"{CURRENCY} {df_view['total_rev'].sum():,.0f}")
+    col3.metric("إجمالي المصاريف والعمالة", f"{CURRENCY} {df_view['total_costs'].sum():,.0f}")
     profit = df_view["net_profit"].sum()
-    col4.metric("صافي الأرباح الإجمالية", f"{profit:,.0f} {CURRENCY}")
+    col4.metric("صافي الأرباح الإجمالية", f"{CURRENCY} {profit:,.0f}")
 
     col5, col6 = st.columns(2)
     total_contract = df_view["contract_value"].sum()
@@ -605,6 +620,10 @@ def page_dashboard():
             barmode="group", title="مقارنة الإيرادات والمصروفات والأرباح لكل مشروع",
             labels={"value": f"المبلغ ({CURRENCY})", "project_name": "المشروع", "variable": "البند"}
         )
+        # نمرّر اسم الخط الاحتياطي صريحاً هنا لأن الرسم البياني يرسم نصه الخاص
+        # ولا يرث حزمة خطوط الصفحة تلقائياً، فبدون هذا قد لا يظهر رمز الريال
+        # الجديد بشكل صحيح داخل عنوان المحور.
+        fig.update_layout(font_family="Tahoma, 'Segoe UI', 'saudi_riyal', sans-serif")
         st.plotly_chart(fig, use_container_width=True)
     with c2:
         df_exp_type = fetch_df("SELECT expense_type, SUM(amount) as amount FROM expenses GROUP BY expense_type")
@@ -747,7 +766,7 @@ def page_revenues():
                 )
                 conn.commit()
                 conn.close()
-                st.success(f"تم تسجيل {stage} بمبلغ {amount:,.2f} {CURRENCY} للمشروع بنجاح!")
+                st.success(f"تم تسجيل {stage} بمبلغ {CURRENCY} {amount:,.2f} للمشروع بنجاح!")
 
     with tab_manage:
         filter_p = st.selectbox("تصفية حسب المشروع:", ["الكل"] + list(p_options.keys()), key="rev_filter")
@@ -769,10 +788,10 @@ def page_revenues():
             return
 
         st.dataframe(df_rev, use_container_width=True, hide_index=True)
-        st.metric("إجمالي الإيرادات المعروضة", f"{df_rev['amount'].sum():,.2f} {CURRENCY}")
+        st.metric("إجمالي الإيرادات المعروضة", f"{CURRENCY} {df_rev['amount'].sum():,.2f}")
 
         st.markdown("#### ✏️ تعديل أو حذف دفعة")
-        rev_labels = {f"#{row['id']} — {row['project_name']} — {row['date']} — {row['amount']:,.0f} {CURRENCY}": row["id"]
+        rev_labels = {f"#{row['id']} — {row['project_name']} — {row['date']} — {CURRENCY} {row['amount']:,.0f}": row["id"]
                       for _, row in df_rev.iterrows()}
         chosen = st.selectbox("اختر السجل:", list(rev_labels.keys()), key="rev_edit_choice")
         rid = rev_labels[chosen]
@@ -868,10 +887,10 @@ def page_expenses():
             return
 
         st.dataframe(df_exp, use_container_width=True, hide_index=True)
-        st.metric("إجمالي المصروفات المعروضة", f"{df_exp['amount'].sum():,.2f} {CURRENCY}")
+        st.metric("إجمالي المصروفات المعروضة", f"{CURRENCY} {df_exp['amount'].sum():,.2f}")
 
         st.markdown("#### ✏️ تعديل أو حذف مصروف")
-        exp_labels = {f"#{row['id']} — {row['project_name']} — {row['date']} — {row['amount']:,.0f} {CURRENCY}": row["id"]
+        exp_labels = {f"#{row['id']} — {row['project_name']} — {row['date']} — {CURRENCY} {row['amount']:,.0f}": row["id"]
                       for _, row in df_exp.iterrows()}
         chosen = st.selectbox("اختر السجل:", list(exp_labels.keys()), key="exp_edit_choice")
         eid = exp_labels[chosen]
@@ -944,7 +963,7 @@ def page_labor():
                 )
                 conn.commit()
                 conn.close()
-                st.success(f"تم تسجيل التكلفة الإجمالية للعمالة بمبلغ {total_labor_cost:,.2f} {CURRENCY}")
+                st.success(f"تم تسجيل التكلفة الإجمالية للعمالة بمبلغ {CURRENCY} {total_labor_cost:,.2f}")
 
     with tab_manage:
         filter_p = st.selectbox("تصفية حسب المشروع:", ["الكل"] + list(p_options.keys()), key="labor_filter")
@@ -966,10 +985,10 @@ def page_labor():
             return
 
         st.dataframe(df_lab, use_container_width=True, hide_index=True)
-        st.metric("إجمالي تكلفة العمالة المعروضة", f"{df_lab['total'].sum():,.2f} {CURRENCY}")
+        st.metric("إجمالي تكلفة العمالة المعروضة", f"{CURRENCY} {df_lab['total'].sum():,.2f}")
 
         st.markdown("#### ✏️ تعديل أو حذف سجل عمالة")
-        lab_labels = {f"#{row['id']} — {row['project_name']} — {row['date']} — {row['total']:,.0f} {CURRENCY}": row["id"]
+        lab_labels = {f"#{row['id']} — {row['project_name']} — {row['date']} — {CURRENCY} {row['total']:,.0f}": row["id"]
                       for _, row in df_lab.iterrows()}
         chosen = st.selectbox("اختر السجل:", list(lab_labels.keys()), key="lab_edit_choice")
         lid = lab_labels[chosen]
