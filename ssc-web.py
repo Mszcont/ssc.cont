@@ -424,6 +424,13 @@ def export_to_excel(df_summary, df_revenues, df_expenses, df_labor):
         df_summary.to_excel(writer, sheet_name="ملخص المشاريع", index=False)
         df_revenues.to_excel(writer, sheet_name="الإيرادات", index=False)
         df_expenses.to_excel(writer, sheet_name="المصروفات", index=False)
+        if not df_expenses.empty:
+            df_expenses_by_type = (
+                df_expenses.groupby("expense_type")["amount"].sum()
+                .reset_index().sort_values("amount", ascending=False)
+                .rename(columns={"expense_type": "نوع المصروف", "amount": "الإجمالي"})
+            )
+            df_expenses_by_type.to_excel(writer, sheet_name="ملخص المصروفات حسب النوع", index=False)
         df_labor.to_excel(writer, sheet_name="العمالة", index=False)
     buffer.seek(0)
     return buffer
@@ -488,7 +495,7 @@ def _ar(text):
         return text
 
 
-def export_to_pdf(df_summary, totals):
+def export_to_pdf(df_summary, totals, df_expenses=None):
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
@@ -501,7 +508,9 @@ def export_to_pdf(df_summary, totals):
     doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1.5 * cm, bottomMargin=1.5 * cm)
 
     title_style = ParagraphStyle("title", fontName=font_name, fontSize=16, alignment=1, spaceAfter=12)
+    section_style = ParagraphStyle("section", fontName=font_name, fontSize=12, alignment=1, spaceAfter=8)
     normal_style = ParagraphStyle("normal", fontName=font_name, fontSize=9, alignment=1)
+    cell_style = ParagraphStyle("cell", fontName=font_name, fontSize=7.5, alignment=1, leading=9)
 
     elements = []
     elements.append(Paragraph(_ar(f"التقرير المالي — {APP_TITLE}"), title_style))
@@ -546,6 +555,63 @@ def export_to_pdf(df_summary, totals):
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f7fa")]),
     ]))
     elements.append(t2)
+
+    # ===== تفاصيل المصروفات =====
+    elements.append(Spacer(1, 20))
+    elements.append(Paragraph(_ar("تفاصيل المصروفات"), section_style))
+
+    if df_expenses is not None and not df_expenses.empty:
+        # ملخص حسب نوع المصروف
+        by_type = (
+            df_expenses.groupby("expense_type")["amount"].sum()
+            .reset_index().sort_values("amount", ascending=False)
+        )
+        type_header = [_ar(h) for h in ["الإجمالي", "نوع المصروف"]]
+        type_rows = [type_header]
+        for _, r in by_type.iterrows():
+            type_rows.append([f"{r['amount']:,.0f}", _ar(r["expense_type"])])
+        t3 = Table(type_rows, colWidths=[5 * cm, 5 * cm])
+        t3.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, -1), font_name),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f2540")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f7fa")]),
+        ]))
+        elements.append(Paragraph(_ar("ملخص حسب نوع المصروف"), normal_style))
+        elements.append(Spacer(1, 6))
+        elements.append(t3)
+        elements.append(Spacer(1, 16))
+
+        # السجل التفصيلي لكل مصروف
+        detail_header = [_ar(h) for h in ["ملاحظات", "القيمة", "النوع", "التاريخ", "المشروع"]]
+        detail_rows = [detail_header]
+        for _, r in df_expenses.iterrows():
+            detail_rows.append([
+                Paragraph(_ar(r.get("notes") or "—"), cell_style),
+                f"{r['amount']:,.0f}",
+                Paragraph(_ar(r["expense_type"]), cell_style),
+                str(r["date"]),
+                Paragraph(_ar(r["project_name"]), cell_style),
+            ])
+        t4 = Table(detail_rows, colWidths=[4.5 * cm, 2.2 * cm, 2.5 * cm, 2.3 * cm, 4.5 * cm], repeatRows=1)
+        t4.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, -1), font_name),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f2540")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f7fa")]),
+        ]))
+        elements.append(Paragraph(_ar("السجل التفصيلي للمصروفات"), normal_style))
+        elements.append(Spacer(1, 6))
+        elements.append(t4)
+    else:
+        elements.append(Paragraph(_ar("لا توجد مصروفات مسجلة للمشاريع المختارة."), normal_style))
 
     doc.build(elements)
     buffer.seek(0)
@@ -1073,6 +1139,33 @@ def page_reports():
         ORDER BY l.date
     """.format(",".join("?" * len(ids))), params=tuple(ids)) if ids else pd.DataFrame()
 
+    st.markdown("### 📉 تفاصيل المصروفات")
+    if not df_expenses.empty:
+        by_type = (
+            df_expenses.groupby("expense_type")["amount"].sum()
+            .reset_index().sort_values("amount", ascending=False)
+            .rename(columns={"expense_type": "نوع المصروف", "amount": "الإجمالي"})
+        )
+        col_a, col_b = st.columns([1, 2])
+        with col_a:
+            st.markdown("**ملخص حسب النوع**")
+            st.dataframe(by_type, use_container_width=True, hide_index=True)
+        with col_b:
+            fig_exp = px.pie(by_type, names="نوع المصروف", values="الإجمالي", title="توزيع المصروفات حسب النوع")
+            st.plotly_chart(fig_exp, use_container_width=True)
+
+        st.markdown("**السجل التفصيلي للمصروفات**")
+        st.dataframe(
+            df_expenses.rename(columns={
+                "project_name": "المشروع", "date": "التاريخ", "expense_type": "النوع",
+                "amount": "القيمة", "notes": "ملاحظات",
+            }),
+            use_container_width=True, hide_index=True
+        )
+        st.caption(f"إجمالي المصروفات للمشاريع المختارة: {CURRENCY} {df_expenses['amount'].sum():,.2f}")
+    else:
+        st.info("لا توجد مصروفات مسجلة للمشاريع المختارة.")
+
     st.markdown("### ⬇️ تحميل التقرير")
     col1, col2 = st.columns(2)
 
@@ -1092,7 +1185,7 @@ def page_reports():
             ("إجمالي المصروفات والعمالة", df_view["total_costs"].sum()),
             ("صافي الربح", df_view["net_profit"].sum()),
         ]
-        pdf_buffer, font_ok, reshape_ok = export_to_pdf(df_view, totals)
+        pdf_buffer, font_ok, reshape_ok = export_to_pdf(df_view, totals, df_expenses)
         st.download_button(
             "📄 تحميل تقرير PDF", data=pdf_buffer,
             file_name=f"تقرير_SSC_{date.today().isoformat()}.pdf",
