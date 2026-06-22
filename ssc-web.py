@@ -228,6 +228,19 @@ def init_db():
     _safe_add_column(cur, "labor", "worker_name TEXT")
     _safe_add_column(cur, "labor", "date TEXT")
 
+    # جدول المصروفات العمومية والإدارية (مصروفات على مستوى الشركة بالكامل،
+    # غير مرتبطة بمشروع معين — تُخصم من إجمالي صافي ربح المشاريع لحساب الصافي
+    # النهائي للشركة)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS ga_expenses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            category TEXT,
+            amount REAL,
+            notes TEXT,
+            created_at TEXT
+        )""")
+
     # جدول المستخدمين
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -351,6 +364,20 @@ def get_project_options():
     return {row["project_name"]: row["project_id"] for _, row in df.iterrows()}
 
 
+def get_ga_expenses_df():
+    """يرجع كل سجلات المصروفات العمومية والإدارية (مصروفات على مستوى الشركة،
+    غير مرتبطة بمشروع معين)."""
+    return fetch_df("SELECT * FROM ga_expenses ORDER BY date DESC")
+
+
+def compute_company_net_profit(projects_net_profit_total):
+    """يحسب الصافي النهائي للشركة بعد خصم إجمالي المصروفات العمومية والإدارية
+    من إجمالي صافي ربح كل المشاريع. يرجع (إجمالي_المصروفات_العمومية, الصافي_النهائي)."""
+    df_ga = get_ga_expenses_df()
+    total_ga = float(df_ga["amount"].sum()) if not df_ga.empty else 0.0
+    return total_ga, projects_net_profit_total - total_ga
+
+
 def build_summary():
     """يبني جدول ملخص مالي شامل لكل مشروع (إيرادات، مصروفات، عمالة، صافي الربح، نسبة التحصيل)."""
     df_p = get_projects_df()
@@ -418,7 +445,7 @@ def build_alerts(df_summary):
 # =====================================================================================
 # التصدير: Excel و PDF
 # =====================================================================================
-def export_to_excel(df_summary, df_revenues, df_expenses, df_labor):
+def export_to_excel(df_summary, df_revenues, df_expenses, df_labor, df_ga=None):
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         df_summary.to_excel(writer, sheet_name="ملخص المشاريع", index=False)
@@ -447,6 +474,16 @@ def export_to_excel(df_summary, df_revenues, df_expenses, df_labor):
                 .rename(columns={"project_name": "المشروع", "total": "الإجمالي"})
             )
             df_labor_by_project.to_excel(writer, sheet_name="ملخص العمالة حسب المشروع", index=False)
+        if df_ga is not None and not df_ga.empty:
+            df_ga[["date", "category", "amount", "notes"]].rename(columns={
+                "date": "التاريخ", "category": "الفئة", "amount": "القيمة", "notes": "ملاحظات",
+            }).to_excel(writer, sheet_name="المصروفات العمومية والإدارية", index=False)
+            df_ga_by_category = (
+                df_ga.groupby("category")["amount"].sum()
+                .reset_index().sort_values("amount", ascending=False)
+                .rename(columns={"category": "الفئة", "amount": "الإجمالي"})
+            )
+            df_ga_by_category.to_excel(writer, sheet_name="ملخص المصروفات العمومية", index=False)
     buffer.seek(0)
     return buffer
 
@@ -510,7 +547,7 @@ def _ar(text):
         return text
 
 
-def export_to_pdf(df_summary, totals, df_expenses=None, df_labor=None):
+def export_to_pdf(df_summary, totals, df_expenses=None, df_labor=None, df_ga=None):
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
@@ -689,6 +726,60 @@ def export_to_pdf(df_summary, totals, df_expenses=None, df_labor=None):
     else:
         elements.append(Paragraph(_ar("لا توجد تكاليف عمالة مسجلة للمشاريع المختارة."), normal_style))
 
+    # ===== تفاصيل المصروفات العمومية والإدارية =====
+    elements.append(Spacer(1, 20))
+    elements.append(Paragraph(_ar("المصروفات العمومية والإدارية (على مستوى الشركة)"), section_style))
+
+    if df_ga is not None and not df_ga.empty:
+        by_category = (
+            df_ga.groupby("category")["amount"].sum()
+            .reset_index().sort_values("amount", ascending=False)
+        )
+        cat_header = [_ar(h) for h in ["الإجمالي", "الفئة"]]
+        cat_rows = [cat_header]
+        for _, r in by_category.iterrows():
+            cat_rows.append([f"{r['amount']:,.0f}", _ar(r["category"])])
+        t7 = Table(cat_rows, colWidths=[5 * cm, 5 * cm])
+        t7.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, -1), font_name),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f2540")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f7fa")]),
+        ]))
+        elements.append(Paragraph(_ar("ملخص حسب الفئة"), normal_style))
+        elements.append(Spacer(1, 6))
+        elements.append(t7)
+        elements.append(Spacer(1, 16))
+
+        ga_header = [_ar(h) for h in ["ملاحظات", "القيمة", "الفئة", "التاريخ"]]
+        ga_rows = [ga_header]
+        for _, r in df_ga.iterrows():
+            ga_rows.append([
+                Paragraph(_ar(r.get("notes") or "—"), cell_style),
+                f"{r['amount']:,.0f}",
+                Paragraph(_ar(r["category"]), cell_style),
+                str(r["date"]),
+            ])
+        t8 = Table(ga_rows, colWidths=[5.5 * cm, 2.3 * cm, 3.5 * cm, 2.7 * cm], repeatRows=1)
+        t8.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, -1), font_name),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f2540")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f7fa")]),
+        ]))
+        elements.append(Paragraph(_ar("السجل التفصيلي للمصروفات العمومية"), normal_style))
+        elements.append(Spacer(1, 6))
+        elements.append(t8)
+    else:
+        elements.append(Paragraph(_ar("لا توجد مصروفات عمومية وإدارية مسجلة."), normal_style))
+
     doc.build(elements)
     buffer.seek(0)
     return buffer, font_ok, reshape_ok
@@ -739,6 +830,21 @@ def page_dashboard():
     total_rev_sum = df_view["total_rev"].sum()
     margin = (profit / total_rev_sum * 100) if total_rev_sum else 0
     col6.metric("هامش الربح العام", f"{margin:,.1f}%")
+
+    # --- الربحية على مستوى الشركة (بعد خصم المصروفات العمومية والإدارية) ---
+    st.markdown("---")
+    st.markdown("### 🏢 الربحية على مستوى الشركة")
+    total_ga, final_profit = compute_company_net_profit(profit)
+    col7, col8, col9 = st.columns(3)
+    col7.metric("صافي ربح المشاريع (قبل الخصم)", f"{CURRENCY} {profit:,.0f}")
+    col8.metric("إجمالي المصروفات العمومية والإدارية", f"{CURRENCY} {total_ga:,.0f}")
+    col9.metric("الصافي النهائي للشركة (بعد الخصم)", f"{CURRENCY} {final_profit:,.0f}")
+    if total_ga > 0 and final_profit < 0:
+        st.markdown(
+            f'<div class="ssc-alert-danger">⚠️ بعد خصم المصروفات العمومية والإدارية، '
+            f'الشركة في خسارة صافية بمقدار {CURRENCY} {abs(final_profit):,.0f}</div>',
+            unsafe_allow_html=True
+        )
 
     st.markdown("### 📋 ملخص أداء المشاريع")
     display_cols = ["project_id", "project_name", "status", "contract_value", "total_rev",
@@ -1172,7 +1278,98 @@ def page_labor():
 
 
 # =====================================================================================
-# الصفحة 6: التقارير والتصدير
+# الصفحة 6: المصروفات العمومية والإدارية (إضافة / تعديل / حذف)
+# =====================================================================================
+def page_ga_expenses():
+    st.title("🏢 المصروفات العمومية والإدارية")
+    st.markdown("---")
+    st.caption(
+        "هذه المصروفات على مستوى الشركة بالكامل (إيجار، رواتب إدارية، اتصالات، إلخ) "
+        "وغير مرتبطة بمشروع معين — تُخصم من إجمالي صافي ربح كل المشاريع لحساب "
+        "الصافي النهائي للشركة في لوحة التحكم والتقارير."
+    )
+
+    ga_categories = ["رواتب إدارية", "إيجار المكتب", "اتصالات وإنترنت", "تأمينات وتراخيص", "صيانة وأصول", "أخرى"]
+
+    tab_add, tab_manage = st.tabs(["➕ تسجيل مصروف عمومي", "📋 القائمة والتعديل"])
+
+    with tab_add:
+        with st.form("ga_expense_form", clear_on_submit=True):
+            ga_date = st.date_input("تاريخ الصرف")
+            ga_category = st.selectbox("الفئة:", ga_categories)
+            ga_amount = st.number_input(f"القيمة ({CURRENCY}):", min_value=0.0, format="%.2f")
+            ga_notes = st.text_area("ملاحظات إضافية:")
+
+            submit = st.form_submit_button("تسجيل المصروف العمومي", use_container_width=True)
+            if submit:
+                conn = get_db_connection()
+                conn.execute(
+                    "INSERT INTO ga_expenses (date, category, amount, notes, created_at) VALUES (?,?,?,?,?)",
+                    (str(ga_date), ga_category, ga_amount, ga_notes, str(datetime.now()))
+                )
+                conn.commit()
+                conn.close()
+                st.success("تم تسجيل المصروف العمومي بنجاح، وسيُخصم من صافي الربح الإجمالي للشركة.")
+
+    with tab_manage:
+        df_ga = get_ga_expenses_df()
+        if df_ga.empty:
+            st.info("لا توجد مصروفات عمومية وإدارية مسجلة بعد.")
+            return
+
+        st.dataframe(
+            df_ga[["id", "date", "category", "amount", "notes"]].rename(columns={
+                "id": "الرقم", "date": "التاريخ", "category": "الفئة",
+                "amount": "القيمة", "notes": "ملاحظات",
+            }),
+            use_container_width=True, hide_index=True
+        )
+        st.metric("إجمالي المصروفات العمومية والإدارية", f"{CURRENCY} {df_ga['amount'].sum():,.2f}")
+
+        st.markdown("#### ✏️ تعديل أو حذف مصروف عمومي")
+        ga_labels = {f"#{row['id']} — {row['date']} — {row['category']} — {CURRENCY} {row['amount']:,.0f}": row["id"]
+                     for _, row in df_ga.iterrows()}
+        chosen = st.selectbox("اختر السجل:", list(ga_labels.keys()), key="ga_edit_choice")
+        gid = ga_labels[chosen]
+        record = df_ga[df_ga["id"] == gid].iloc[0]
+
+        with st.form("ga_expense_edit_form"):
+            try:
+                gdate = datetime.strptime(str(record["date"]), "%Y-%m-%d").date()
+            except Exception:
+                gdate = date.today()
+            new_date = st.date_input("التاريخ:", value=gdate, key="ga_edit_date")
+            new_category = st.selectbox("الفئة:", ga_categories,
+                                         index=ga_categories.index(record["category"]) if record["category"] in ga_categories else 0)
+            new_amount = st.number_input("القيمة:", min_value=0.0, value=float(record["amount"]), format="%.2f")
+            new_notes = st.text_area("ملاحظات:", value=record.get("notes") or "")
+
+            colA, colB = st.columns(2)
+            save_btn = colA.form_submit_button("💾 حفظ التعديلات", use_container_width=True)
+            with colB:
+                confirm_del = st.checkbox("أؤكد رغبتي في حذف هذا السجل", key="ga_confirm_del")
+                del_btn = st.form_submit_button("🗑️ حذف", use_container_width=True, disabled=not confirm_del)
+
+            if save_btn:
+                conn = get_db_connection()
+                conn.execute("UPDATE ga_expenses SET date=?, category=?, amount=?, notes=? WHERE id=?",
+                             (str(new_date), new_category, new_amount, new_notes, gid))
+                conn.commit()
+                conn.close()
+                st.success("تم حفظ التعديلات.")
+                st.rerun()
+
+            if del_btn and confirm_del:
+                conn = get_db_connection()
+                conn.execute("DELETE FROM ga_expenses WHERE id=?", (gid,))
+                conn.commit()
+                conn.close()
+                st.success("تم حذف السجل.")
+                st.rerun()
+
+
+# =====================================================================================
+# الصفحة 7: التقارير والتصدير
 # =====================================================================================
 def page_reports():
     st.title("📑 التقارير والتصدير")
@@ -1272,11 +1469,47 @@ def page_reports():
     else:
         st.info("لا توجد تكاليف عمالة مسجلة للمشاريع المختارة.")
 
+    st.markdown("### 🏢 المصروفات العمومية والإدارية")
+    st.caption("هذه مصروفات على مستوى الشركة بالكامل، وتُعرض هنا كاملة بصرف النظر عن فلتر المشاريع أعلاه.")
+    df_ga = get_ga_expenses_df()
+    if not df_ga.empty:
+        col_e, col_f = st.columns([1, 2])
+        by_category = (
+            df_ga.groupby("category")["amount"].sum()
+            .reset_index().sort_values("amount", ascending=False)
+            .rename(columns={"category": "الفئة", "amount": "الإجمالي"})
+        )
+        with col_e:
+            st.markdown("**ملخص حسب الفئة**")
+            st.dataframe(by_category, use_container_width=True, hide_index=True)
+        with col_f:
+            fig_ga = px.pie(by_category, names="الفئة", values="الإجمالي", title="توزيع المصروفات العمومية حسب الفئة")
+            st.plotly_chart(fig_ga, use_container_width=True)
+
+        st.markdown("**السجل التفصيلي للمصروفات العمومية**")
+        st.dataframe(
+            df_ga[["date", "category", "amount", "notes"]].rename(columns={
+                "date": "التاريخ", "category": "الفئة", "amount": "القيمة", "notes": "ملاحظات",
+            }),
+            use_container_width=True, hide_index=True
+        )
+        st.caption(f"إجمالي المصروفات العمومية والإدارية: {CURRENCY} {df_ga['amount'].sum():,.2f}")
+    else:
+        st.info("لا توجد مصروفات عمومية وإدارية مسجلة.")
+
+    project_profit = df_view["net_profit"].sum()
+    total_ga, final_profit = compute_company_net_profit(project_profit)
+    st.markdown("---")
+    col_g, col_h, col_i = st.columns(3)
+    col_g.metric("صافي ربح المشاريع المختارة", f"{CURRENCY} {project_profit:,.0f}")
+    col_h.metric("إجمالي المصروفات العمومية والإدارية", f"{CURRENCY} {total_ga:,.0f}")
+    col_i.metric("الصافي النهائي للشركة (بعد الخصم)", f"{CURRENCY} {final_profit:,.0f}")
+
     st.markdown("### ⬇️ تحميل التقرير")
     col1, col2 = st.columns(2)
 
     with col1:
-        excel_buffer = export_to_excel(df_view, df_revenues, df_expenses, df_labor)
+        excel_buffer = export_to_excel(df_view, df_revenues, df_expenses, df_labor, df_ga)
         st.download_button(
             "📊 تحميل تقرير Excel", data=excel_buffer,
             file_name=f"تقرير_SSC_{date.today().isoformat()}.xlsx",
@@ -1289,9 +1522,11 @@ def page_reports():
             ("إجمالي قيمة العقود", df_view["contract_value"].sum()),
             ("إجمالي الإيرادات", df_view["total_rev"].sum()),
             ("إجمالي المصروفات والعمالة", df_view["total_costs"].sum()),
-            ("صافي الربح", df_view["net_profit"].sum()),
+            ("صافي ربح المشاريع", project_profit),
+            ("إجمالي المصروفات العمومية والإدارية", total_ga),
+            ("الصافي النهائي للشركة (بعد الخصم)", final_profit),
         ]
-        pdf_buffer, font_ok, reshape_ok = export_to_pdf(df_view, totals, df_expenses, df_labor)
+        pdf_buffer, font_ok, reshape_ok = export_to_pdf(df_view, totals, df_expenses, df_labor, df_ga)
         st.download_button(
             "📄 تحميل تقرير PDF", data=pdf_buffer,
             file_name=f"تقرير_SSC_{date.today().isoformat()}.pdf",
@@ -1317,7 +1552,7 @@ def page_reports():
 
 
 # =====================================================================================
-# الصفحة 7: النسخ الاحتياطي والاستعادة
+# الصفحة 8: النسخ الاحتياطي والاستعادة
 # =====================================================================================
 def page_backup():
     st.title("💾 النسخ الاحتياطي والاستعادة")
@@ -1351,7 +1586,7 @@ def page_backup():
 
 
 # =====================================================================================
-# الصفحة 8: إدارة المستخدمين (للمدير فقط)
+# الصفحة 9: إدارة المستخدمين (للمدير فقط)
 # =====================================================================================
 def page_users():
     st.title("👤 إدارة المستخدمين")
@@ -1493,6 +1728,7 @@ menu_items = [
     "💰 الإيرادات",
     "📉 المصروفات",
     "👷 تكاليف العمالة",
+    "🏢 المصروفات العمومية والإدارية",
     "📑 التقارير والتصدير",
 ]
 if is_admin():
@@ -1515,6 +1751,8 @@ elif menu == "📉 المصروفات":
     page_expenses()
 elif menu == "👷 تكاليف العمالة":
     page_labor()
+elif menu == "🏢 المصروفات العمومية والإدارية":
+    page_ga_expenses()
 elif menu == "📑 التقارير والتصدير":
     page_reports()
 elif menu == "💾 النسخ الاحتياطي" and is_admin():
