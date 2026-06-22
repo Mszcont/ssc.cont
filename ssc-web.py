@@ -432,6 +432,21 @@ def export_to_excel(df_summary, df_revenues, df_expenses, df_labor):
             )
             df_expenses_by_type.to_excel(writer, sheet_name="ملخص المصروفات حسب النوع", index=False)
         df_labor.to_excel(writer, sheet_name="العمالة", index=False)
+        if not df_labor.empty:
+            df_labor_filled = df_labor.copy()
+            df_labor_filled["worker_name"] = df_labor_filled["worker_name"].fillna("غير محدد").replace("", "غير محدد")
+            df_labor_by_worker = (
+                df_labor_filled.groupby("worker_name")["total"].sum()
+                .reset_index().sort_values("total", ascending=False)
+                .rename(columns={"worker_name": "العامل / الفريق", "total": "الإجمالي"})
+            )
+            df_labor_by_worker.to_excel(writer, sheet_name="ملخص العمالة حسب العامل", index=False)
+            df_labor_by_project = (
+                df_labor.groupby("project_name")["total"].sum()
+                .reset_index().sort_values("total", ascending=False)
+                .rename(columns={"project_name": "المشروع", "total": "الإجمالي"})
+            )
+            df_labor_by_project.to_excel(writer, sheet_name="ملخص العمالة حسب المشروع", index=False)
     buffer.seek(0)
     return buffer
 
@@ -495,7 +510,7 @@ def _ar(text):
         return text
 
 
-def export_to_pdf(df_summary, totals, df_expenses=None):
+def export_to_pdf(df_summary, totals, df_expenses=None, df_labor=None):
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
@@ -612,6 +627,67 @@ def export_to_pdf(df_summary, totals, df_expenses=None):
         elements.append(t4)
     else:
         elements.append(Paragraph(_ar("لا توجد مصروفات مسجلة للمشاريع المختارة."), normal_style))
+
+    # ===== تفاصيل تكاليف العمالة =====
+    elements.append(Spacer(1, 20))
+    elements.append(Paragraph(_ar("تفاصيل تكاليف العمالة"), section_style))
+
+    if df_labor is not None and not df_labor.empty:
+        df_labor_filled = df_labor.copy()
+        df_labor_filled["worker_name"] = df_labor_filled["worker_name"].fillna("غير محدد").replace("", "غير محدد")
+
+        # ملخص حسب العامل / الفريق
+        by_worker = (
+            df_labor_filled.groupby("worker_name")["total"].sum()
+            .reset_index().sort_values("total", ascending=False)
+        )
+        worker_header = [_ar(h) for h in ["الإجمالي", "العامل / الفريق"]]
+        worker_rows = [worker_header]
+        for _, r in by_worker.iterrows():
+            worker_rows.append([f"{r['total']:,.0f}", _ar(r["worker_name"])])
+        t5 = Table(worker_rows, colWidths=[5 * cm, 5 * cm])
+        t5.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, -1), font_name),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f2540")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f7fa")]),
+        ]))
+        elements.append(Paragraph(_ar("ملخص حسب العامل / الفريق"), normal_style))
+        elements.append(Spacer(1, 6))
+        elements.append(t5)
+        elements.append(Spacer(1, 16))
+
+        # السجل التفصيلي لكل تكلفة عمالة
+        labor_header = [_ar(h) for h in ["الإجمالي", "الأجر", "الأيام/الساعات", "التاريخ", "العامل / الفريق", "المشروع"]]
+        labor_rows = [labor_header]
+        for _, r in df_labor_filled.iterrows():
+            labor_rows.append([
+                f"{r['total']:,.0f}",
+                f"{r['wage']:,.0f}",
+                f"{r['days']:,.1f}",
+                str(r["date"]),
+                Paragraph(_ar(r["worker_name"]), cell_style),
+                Paragraph(_ar(r["project_name"]), cell_style),
+            ])
+        t6 = Table(labor_rows, colWidths=[2.2 * cm, 2.0 * cm, 2.3 * cm, 2.2 * cm, 3.5 * cm, 3.8 * cm], repeatRows=1)
+        t6.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, -1), font_name),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f2540")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f7fa")]),
+        ]))
+        elements.append(Paragraph(_ar("السجل التفصيلي لتكاليف العمالة"), normal_style))
+        elements.append(Spacer(1, 6))
+        elements.append(t6)
+    else:
+        elements.append(Paragraph(_ar("لا توجد تكاليف عمالة مسجلة للمشاريع المختارة."), normal_style))
 
     doc.build(elements)
     buffer.seek(0)
@@ -1166,6 +1242,36 @@ def page_reports():
     else:
         st.info("لا توجد مصروفات مسجلة للمشاريع المختارة.")
 
+    st.markdown("### 👷 تفاصيل تكاليف العمالة")
+    if not df_labor.empty:
+        df_labor_filled = df_labor.copy()
+        df_labor_filled["worker_name"] = df_labor_filled["worker_name"].fillna("غير محدد").replace("", "غير محدد")
+
+        by_worker = (
+            df_labor_filled.groupby("worker_name")["total"].sum()
+            .reset_index().sort_values("total", ascending=False)
+            .rename(columns={"worker_name": "العامل / الفريق", "total": "الإجمالي"})
+        )
+        col_c, col_d = st.columns([1, 2])
+        with col_c:
+            st.markdown("**ملخص حسب العامل / الفريق**")
+            st.dataframe(by_worker, use_container_width=True, hide_index=True)
+        with col_d:
+            fig_lab = px.pie(by_worker, names="العامل / الفريق", values="الإجمالي", title="توزيع تكاليف العمالة حسب العامل/الفريق")
+            st.plotly_chart(fig_lab, use_container_width=True)
+
+        st.markdown("**السجل التفصيلي لتكاليف العمالة**")
+        st.dataframe(
+            df_labor_filled.rename(columns={
+                "project_name": "المشروع", "worker_name": "العامل / الفريق", "date": "التاريخ",
+                "days": "الأيام/الساعات", "wage": "الأجر", "total": "الإجمالي",
+            }),
+            use_container_width=True, hide_index=True
+        )
+        st.caption(f"إجمالي تكاليف العمالة للمشاريع المختارة: {CURRENCY} {df_labor['total'].sum():,.2f}")
+    else:
+        st.info("لا توجد تكاليف عمالة مسجلة للمشاريع المختارة.")
+
     st.markdown("### ⬇️ تحميل التقرير")
     col1, col2 = st.columns(2)
 
@@ -1185,7 +1291,7 @@ def page_reports():
             ("إجمالي المصروفات والعمالة", df_view["total_costs"].sum()),
             ("صافي الربح", df_view["net_profit"].sum()),
         ]
-        pdf_buffer, font_ok, reshape_ok = export_to_pdf(df_view, totals, df_expenses)
+        pdf_buffer, font_ok, reshape_ok = export_to_pdf(df_view, totals, df_expenses, df_labor)
         st.download_button(
             "📄 تحميل تقرير PDF", data=pdf_buffer,
             file_name=f"تقرير_SSC_{date.today().isoformat()}.pdf",
